@@ -23,7 +23,6 @@
 static thread_func start_process NO_RETURN;
 static bool load (const char *cmdline, void (**eip) (void), void **esp);
 void argument_stack(const char **parse, const int arg_count, void **esp);
-void remove_child_process(struct thread *child);
 
 /* Starts a new thread running a user program loaded from
    FILENAME.  The new thread may be scheduled (and may even exit)
@@ -33,13 +32,13 @@ tid_t
 process_execute (const char *file_name) 
 {
   char *fn_copy;
-  char fn_copy_more[256]; /* Added to eliminate segmentation fault. */
+  char *fn_copy_more; 
   tid_t tid;
 
   /* Make a copy of FILE_NAME.
      Otherwise there's a race between the caller and load(). */
   fn_copy = palloc_get_page (0);
-  //fn_copy_more = palloc_get_page (0);
+  fn_copy_more = palloc_get_page (0);
   if (fn_copy == NULL)
     return TID_ERROR;
 
@@ -47,10 +46,10 @@ process_execute (const char *file_name)
   strlcpy (fn_copy_more, file_name, PGSIZE);
 
   /* Used for 3rd argument in 'strtok_r' function.*/
-  char *strtok_save_ptr;
+  char *save_ptr;
 
   /* get 1st token from 'file_name' */
-  char *thread_name = strtok_r(fn_copy_more, " ", &strtok_save_ptr);
+  char *thread_name = strtok_r(fn_copy_more, " ", &save_ptr);
   if(!thread_name) /* Exit if tokenizing task fails. */
     return TID_ERROR;
 
@@ -74,12 +73,7 @@ start_process (void *file_name_)
   struct intr_frame if_;
   bool success;
 
-  /*
-    Temporary variable that store tokenized arguments from 'file_name' variable.
-    This variable will be used in 'argument_stack' function to store argument into stack.
-  */
-  char **parse = (char**)malloc(sizeof(char*)); //parsed tokens will be stored here temporary.
-  //char **parse = palloc_get_page(0); //parsed tokens will be stored here temporary.
+  char **parse = (char **)malloc(sizeof(char *)); //parsed tokens will be stored temporarily 
   int arg_count = 0; //The number of parsed arguments.
   char *temp_parsed; //The variable that store one parsed argument temporary.
   char *strtok_save_ptr; //3rd argument of strtok_r function.
@@ -91,12 +85,15 @@ start_process (void *file_name_)
   {
     parse = (char**)realloc(parse, sizeof(char*)*(arg_count + 1));
     parse[arg_count] = (char*)malloc(sizeof(char)*strlen(temp_parsed));
-    strlcpy(parse[arg_count], temp_parsed, sizeof(char)*(strlen(temp_parsed) + 1)); //To prevent shallow copy, strlcpy function be used.
+    strlcpy(parse[arg_count], temp_parsed, sizeof(char)*(strlen(temp_parsed) + 1)); 
     arg_count++;
   }
 
   /* 1st token parsed from 'file_name' that will be passed to 'load' function. */
   char *load_file_name = parse[0];
+  
+  /* vm_entry */
+  vm_init(&thread_current()->vm);
 
   /* Initialize interrupt frame and load executable. */
   memset (&if_, 0, sizeof if_);
@@ -105,18 +102,20 @@ start_process (void *file_name_)
   if_.eflags = FLAG_IF | FLAG_MBS;
   success = load (load_file_name, &if_.eip, &if_.esp);
 
-  thread_current()->is_load = 1;
-  if(thread_current()->parent_thread){
-	sema_up(&thread_current()->load_sema);
-  }
-
   argument_stack(parse , arg_count , &if_.esp);
+  //hex_dump(if_.esp,if_.esp,PHYS_BASE - if_.esp, true);
+
+  sema_up(&thread_current()->load_sema);
 
   /* If load failed, quit. */
   palloc_free_page (file_name);
-  if (!success)
+  if (!success){
+    thread_current() -> is_load = 0;
     thread_exit ();
-
+  }
+  else{
+    thread_current() -> is_load = 1;
+  }
   /* Free dynamically allocated memory used for parsing. */
   arg_count--;
   while(arg_count >= 0)
@@ -144,7 +143,6 @@ argument_stack(const char **parse, const int arg_count, void **esp)
 
   for(i = arg_count - 1; i >= 0; i--)
   {
-    /* Inserting argv data into stack by 'char' data size. */
     for(j = strlen(parse[i]); j >= 0; j--)
     {
       *esp -= 1;
@@ -156,7 +154,8 @@ argument_stack(const char **parse, const int arg_count, void **esp)
   }
 
   /* Word Size Align */
-  *esp = (unsigned int)*esp & 0xfffffffc;
+  unsigned int count_number = ((unsigned int)*esp) % sizeof(uint32_t); 
+  *esp -= count_number;
 
   /* NULL argv set. */
   *esp -= 4;
@@ -169,7 +168,7 @@ argument_stack(const char **parse, const int arg_count, void **esp)
     *(unsigned int*)(*esp) = argv_addr_store[i];
   }
 
-  /* insert address of '**argv'. This is equal to *argv[0], so code looks like below. */
+  /* insert address of '**argv'. */
   *esp -= 4;
   *(unsigned int*)(*esp) = (unsigned int)(*esp) + 4;
 
@@ -182,8 +181,8 @@ argument_stack(const char **parse, const int arg_count, void **esp)
   memset(*esp, 0, sizeof(unsigned int));
 }
 
-struct thread
-*get_child_process(int pid)
+struct thread *
+get_child_process(int pid)
 {
   struct thread *parent = thread_current(); /* Get current process object */
   struct thread *child = NULL; /* Initialize child process object. */
@@ -193,7 +192,7 @@ struct thread
   for(e = list_begin(&parent->child_list); e != list_end(&parent->child_list); e = list_next(e))
   {
     struct thread *node = list_entry(e, struct thread, child_elem); //Get each object in list.
-    if(node->tid == pid) //If find target child...
+    if(node->tid ==(tid_t)pid) //If find target child...
     {
       child = node;
       break;
@@ -227,16 +226,24 @@ process_add_file(struct file *f)
 /* This function searches fd table and returns address of file object. */
 struct file *
 process_get_file(int fd)
-{
-  return thread_current()->file_desc_table[fd]; //Returns matched file object.
+{ 
+  struct thread *t = thread_current(); 
+  if( fd <2 || t-> file_desc_count <= fd){
+	return NULL;
+  }
+  return t->file_desc_table[fd];
 }
 
 /* This function closes related file and initialize correpond fd table. */
 void
 process_close_file(int fd)
 {
-  file_close(thread_current()->file_desc_table[fd]); //Close target file.
-  thread_current()->file_desc_table[fd] = NULL; //Set target table to NULL.
+  struct thread *t = thread_current();
+  if( fd < 2 || t-> file_desc_count <= fd){
+	return;
+  }
+  file_close(t->file_desc_table[fd]);
+  t->file_desc_table[fd] = NULL;
 }
 
 /* Waits for thread TID to die and returns its exit status.  If
@@ -281,7 +288,13 @@ process_exit (void)
     process_close_file(i);
   }
   palloc_free_page(cur->file_desc_table); //Clear memory for file descriptor table.
-  file_close(cur->run_file);
+  if(cur->run_file){
+     file_close(cur->run_file);
+  }
+
+  /*vm_entry */
+  vm_destroy (&cur->vm);
+
   pd = cur->pagedir;
   if (pd != NULL) 
     {
@@ -404,6 +417,7 @@ load (const char *file_name, void (**eip) (void), void **esp)
   if (t->pagedir == NULL) 
     goto done;
   process_activate ();
+  lock_init(&filesys_lock);
   lock_acquire(&filesys_lock);
   /* Open executable file. */
   file = filesys_open (file_name);
@@ -584,29 +598,50 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
       size_t page_read_bytes = read_bytes < PGSIZE ? read_bytes : PGSIZE;
       size_t page_zero_bytes = PGSIZE - page_read_bytes;
 
-      /* Get a page of memory. */
-      uint8_t *kpage = palloc_get_page (PAL_USER);
-      if (kpage == NULL)
+    //  /* Get a page of memory. */
+    //  uint8_t *kpage = palloc_get_page (PAL_USER);
+    //  if (kpage == NULL)
+    //    return false;
+    //
+    //  /* Load this page. */
+    //  if (file_read (file, kpage, page_read_bytes) != (int) page_read_bytes)
+    //    {
+    //      palloc_free_page (kpage);
+    //      return false; 
+    //    }
+    //  memset (kpage + page_read_bytes, 0, page_zero_bytes);
+    //
+    //  /* Add the page to the process's address space. */
+    //  if (!install_page (upage, kpage, writable)) 
+    //    {
+    //      palloc_free_page (kpage);
+    //      return false; 
+    //    }
+      struct vm_entry *vme = (struct vm_entry *)malloc(sizeof(struct vm_entry));
+      if (vme != NULL)
+      {
+        vme->type = VM_BIN;
+        vme->vaddr = pg_round_down(upage);
+        vme->writable = writable;
+        vme->is_loaded = false;
+        vme->file = file;
+        vme->offset = ofs;
+        vme->read_bytes = page_read_bytes;
+        vme->zero_bytes = page_zero_bytes;
+        vme->swap_slot = 0;
+      }
+      else
         return false;
 
-      /* Load this page. */
-      if (file_read (file, kpage, page_read_bytes) != (int) page_read_bytes)
-        {
-          palloc_free_page (kpage);
-          return false; 
-        }
-      memset (kpage + page_read_bytes, 0, page_zero_bytes);
-
-      /* Add the page to the process's address space. */
-      if (!install_page (upage, kpage, writable)) 
-        {
-          palloc_free_page (kpage);
-          return false; 
-        }
-
+      if (!insert_vme (&thread_current()->vm, vme))
+      {
+        free(vme);
+        return false;
+      }
       /* Advance. */
       read_bytes -= page_read_bytes;
       zero_bytes -= page_zero_bytes;
+      ofs += page_read_bytes;
       upage += PGSIZE;
     }
   return true;
@@ -619,6 +654,7 @@ setup_stack (void **esp)
 {
   uint8_t *kpage;
   bool success = false;
+  struct vm_entry *vme = (struct vm_entry *)malloc(sizeof(struct vm_entry));
 
   kpage = palloc_get_page (PAL_USER | PAL_ZERO);
   if (kpage != NULL) 
@@ -628,8 +664,20 @@ setup_stack (void **esp)
         *esp = PHYS_BASE;
       else
         palloc_free_page (kpage);
+	return false;
     }
-  return success;
+  if(vme == NULL){
+	return false;
+  }
+  memset(vme,0,sizeof(struct vm_entry));
+  vme->type = VM_BIN;
+  vme->vaddr = ((uint8_t *) PHYS_BASE - PGSIZE);
+  vme->writable = true;
+  vme->is_loaded = true;
+  if(insert_vme(&thread_current()->vm,vme) == NULL){
+	return false;
+  } 
+  return true;
 }
 
 /* Adds a mapping from user virtual address UPAGE to kernel

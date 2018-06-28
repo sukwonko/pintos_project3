@@ -5,7 +5,8 @@
 #include <list.h>
 #include <stdint.h>
 #include <threads/synch.h> /* Added to use semaphore */
-
+#include "filesys/file.h"
+#include "hash.h"
 /* States in a thread's life cycle. */
 enum thread_status
   {
@@ -112,7 +113,7 @@ struct thread
     /* Check load/exit state */
     int is_load;
     int is_exit;
-
+   
     /* semaphore for load/exit */
     struct semaphore load_sema;
     struct semaphore exit_sema;
@@ -122,6 +123,10 @@ struct thread
    
     /* file struct pointer */
     struct file *run_file; 
+   
+    /* hash table */ 
+    struct hash vm;
+ 
     /* Owned by thread.c. */
     unsigned magic;                     /* Detects stack overflow. */
   };

@@ -208,7 +208,7 @@ thread_create (const char *name, int priority, thread_func *function, void *aux)
 
 
   /* Implement file descriptor table */
-  t->file_desc_table = palloc_get_page(0);
+  t->file_desc_table = (struct file **)palloc_get_page(0);
   t->file_desc_count = 2;
 
   /* Implement process hierarchy */
@@ -318,12 +318,7 @@ thread_exit (void)
   intr_disable ();
   list_remove (&thread_current()->allelem);
 
-  /* If thread name is main(thus, if this thread is init thread), do not sema up this. */
-  if(strcmp(thread_current()->name, "main")) //If thread is not "main" process, sema up.
-  {
-    sema_up(&thread_current()->exit_sema);
-  }
-
+  thread_current() -> is_exit = 1;
   thread_current ()->status = THREAD_DYING;
   schedule ();
   NOT_REACHED ();
