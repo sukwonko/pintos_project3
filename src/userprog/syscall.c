@@ -5,13 +5,8 @@
 #include "threads/thread.h"
 #include "devices/shutdown.h" /* Added to use 'shutdown_power_off' function */
 #include "filesys/filesys.h" /* Added to use filesystem related function */
-#include "filesys/file.h" /* Added to use filesystem related function */
-#include "devices/input.h" /* Added to use input_getc() function */
-#include "userprog/process.h" /* Added to use process_execute() */
-#include "threads/synch.h" /* Added to use lock */
-#include "filesys/inode.h"
-#include "filesys/directory.h"
-
+#include "vm/page.h"
+#include "string.h" 
 static void syscall_handler (struct intr_frame *);
 struct lock filesys_lock; /* Added to use filesystem lock to prevent unexpected situation. */
 
@@ -47,7 +42,7 @@ syscall_handler (struct intr_frame *f)
 	//char *file=NULL, *filename=NULL;
 	//void *buffer;
 	//unsigned int size,position;
-	//int *argument[4]={0, }; //Arguments for system call will be stored temporary.
+	int *argument[4]={0, }; //Arguments for system call will be stored temporary.
 
 	check_address(f->esp,f->esp);
 
@@ -61,7 +56,7 @@ syscall_handler (struct intr_frame *f)
 			get_argument(f->esp,(int *)argument, 1); //One argument will be used.
 			check_address((void *)(argument[0]),f->esp);
 			//status =*(int *)argument[0]; //Type casting.
-			exit(*(int *)arg[0]);
+			exit(*(int *)argument[0]);
 			break;
 
 		case SYS_EXEC:
@@ -180,7 +175,7 @@ get_argument(void *esp, int *arg, int count)
 	for(i = 0; i < count; i++)
 	{
 		esp = esp + 4;
-		check_address(esp);
+		check_address(esp,esp);
 		arg[i] =*(int *)esp; /* Insert each esp address into kernel stack */
 	}
 }
@@ -393,7 +388,7 @@ check_valid_buffer (void *buffer, unsigned size, void *esp, bool to_write)
   while ((int)size > count * 1024)
   {
     vme = check_address (buffer + count * 1024, esp);
-    if (vme == NULL || vme->writable != to_write)
+    if (vme == NULL || (vme->writable != to_write))
       exit (-1);
     count++;
   }
